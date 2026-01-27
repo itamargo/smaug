@@ -239,6 +239,8 @@ async function main() {
       const force = args.includes('--force') || args.includes('-f');
       const includeMedia = args.includes('--media') || args.includes('-m');
       const fetchAll = args.includes('--all') || args.includes('-a') || args.includes('-all');
+      const obsidian = args.includes('--obsidian');
+      const dryRun = args.includes('--dry-run');
 
       // Parse --source flag
       const sourceIdx = args.findIndex(a => a === '--source' || a === '-s');
@@ -265,13 +267,23 @@ async function main() {
         source,
         includeMedia,
         all: fetchAll,
-        maxPages
+        maxPages,
+        obsidian,
+        dryRun
       });
 
       if (result.count > 0) {
-        console.log(`\n✓ Prepared ${result.count} tweets.`);
-        console.log(`  Output: ${result.pendingFile}`);
-        console.log('\nNext: Run `npx smaug run` to process with Claude');
+        if (obsidian) {
+          if (dryRun) {
+            console.log(`\n✓ Dry run: ${result.count} notes would be created.`);
+          } else {
+            console.log(`\n✓ Created ${result.obsidianCount || result.count} notes in Obsidian vault.`);
+          }
+        } else {
+          console.log(`\n✓ Prepared ${result.count} tweets.`);
+          console.log(`  Output: ${result.pendingFile}`);
+          console.log('\nNext: Run `npx smaug run` to process with Claude');
+        }
       } else {
         console.log('\nNo new tweets to process.');
       }
@@ -355,6 +367,8 @@ Commands:
   fetch --force  Re-fetch even if already archived
   fetch --source <source>  Fetch from: bookmarks, likes, or both
   fetch --media  EXPERIMENTAL: Include media attachments
+  fetch --obsidian  Export bookmarks as Obsidian vault notes
+  fetch --dry-run   With --obsidian: preview notes without writing
   process        Show pending tweets
   status         Show current status
 
@@ -370,6 +384,8 @@ Examples:
   smaug fetch --source both      # Fetch from bookmarks AND likes
   smaug fetch --media            # Include photos/videos/GIFs (experimental)
   smaug fetch --force            # Re-process archived tweets
+  smaug fetch --obsidian         # Export to Obsidian vault
+  smaug fetch --obsidian --dry-run  # Preview Obsidian notes
 
 Config (smaug.config.json):
   "source": "bookmarks"    Default source (bookmarks, likes, or both)

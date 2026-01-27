@@ -132,7 +132,35 @@ const DEFAULT_CONFIG = {
   webhookUrl: null,
 
   // Webhook type: 'discord', 'slack', or 'generic'
-  webhookType: 'discord'
+  webhookType: 'discord',
+
+  // ---- Obsidian Vault Export ----
+  // Export bookmarks as notes in an Obsidian vault
+  obsidian: {
+    // Path to Obsidian vault (must be configured by user)
+    vaultPath: null,
+    // Folder within vault for clippings
+    clippingsFolder: 'Clippings'
+  },
+
+  // ---- z.ai Provider Settings (project-scoped) ----
+  // Use z.ai's GLM models instead of Anthropic Claude
+  // See: https://docs.z.ai/scenario-example/develop-tools/claude
+  zai: {
+    // Enable z.ai provider (disables Anthropic)
+    enabled: false,
+    // z.ai API key (passed as ANTHROPIC_AUTH_TOKEN)
+    apiKey: null,
+    // z.ai API endpoint
+    baseUrl: 'https://api.z.ai/api/anthropic',
+    // Optional: Override default model mappings
+    // By default: opus→GLM-4.7, sonnet→GLM-4.7, haiku→GLM-4.5-Air
+    modelMapping: {
+      opus: null,    // e.g., 'GLM-4.5' to override
+      sonnet: null,  // e.g., 'GLM-4.5-Air' to override
+      haiku: null    // e.g., 'GLM-4.5-Flash' to override
+    }
+  }
 };
 
 /**
@@ -193,6 +221,21 @@ export function loadConfig(configPath) {
     folders: {
       ...DEFAULT_CONFIG.folders,
       ...fileConfig.folders
+    },
+    // Deep merge z.ai config
+    zai: {
+      ...DEFAULT_CONFIG.zai,
+      ...fileConfig.zai,
+      modelMapping: {
+        ...DEFAULT_CONFIG.zai.modelMapping,
+        ...(fileConfig.zai?.modelMapping || {})
+      }
+    },
+    // Deep merge obsidian config
+    obsidian: {
+      ...DEFAULT_CONFIG.obsidian,
+      ...fileConfig.obsidian
+    }
     }
   };
 
@@ -251,6 +294,11 @@ export function loadConfig(configPath) {
   config.stateFile = expandTilde(config.stateFile);
   config.birdPath = expandTilde(config.birdPath);
   config.projectRoot = expandTilde(config.projectRoot);
+
+  // Expand ~ in obsidian vault path
+  if (config.obsidian?.vaultPath) {
+    config.obsidian.vaultPath = expandTilde(config.obsidian.vaultPath);
+  }
 
   // Expand ~ in category folders
   if (config.categories) {

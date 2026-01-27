@@ -9,5 +9,21 @@
     "ct0": "YOUR_CT0_HERE"
   },
   "autoInvokeClaude": true,
-  "claudeModel": "sonnet"
+  "claudeModel": "sonnet",
+
+  "obsidian": {
+    "vaultPath": "~/your-vault",
+    "clippingsFolder": "Clippings"
+  },
+
+  "zai": {
+    "enabled": false,
+    "apiKey": "YOUR_ZAI_API_KEY_HERE",
+    "baseUrl": "https://api.z.ai/api/anthropic",
+    "modelMapping": {
+      "opus": null,
+      "sonnet": null,
+      "haiku": null
+    }
+  }
 }

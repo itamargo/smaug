@@ -112,6 +112,12 @@ npx smaug fetch --source likes
 # Fetch from both bookmarks AND likes
 npx smaug fetch --source both
 
+# Export to Obsidian vault as individual notes
+npx smaug fetch --obsidian
+
+# Preview Obsidian export without writing files
+npx smaug fetch --obsidian --dry-run
+
 # Process already-fetched tweets
 npx smaug process
 
@@ -342,7 +348,11 @@ Example `smaug.config.json`:
   "claudeTimeout": 900000,
   "allowedTools": "Read,Write,Edit,Glob,Grep,Bash,Task,TodoWrite",
   "webhookUrl": null,
-  "webhookType": "discord"
+  "webhookType": "discord",
+  "obsidian": {
+    "vaultPath": "~/your-vault",
+    "clippingsFolder": "Clippings"
+  }
 }
 ```
 
@@ -357,6 +367,8 @@ Example `smaug.config.json`:
 | `claudeTimeout` | `900000` | Max processing time (15 min) |
 | `parallelThreshold` | `8` | Min bookmarks before parallel processing kicks in |
 | `webhookUrl` | `null` | Discord/Slack webhook for notifications |
+| `obsidian.vaultPath` | `null` | Path to Obsidian vault (required for `--obsidian`) |
+| `obsidian.clippingsFolder` | `Clippings` | Folder within vault for exported notes |
 
 Environment variables also work: `AUTH_TOKEN`, `CT0`, `SOURCE`, `INCLUDE_MEDIA`, `ARCHIVE_FILE`, `TIMEZONE`, `CLAUDE_MODEL`, etc.
 
@@ -384,6 +396,34 @@ When enabled, the `media[]` array is included in the pending JSON with:
 ⚠️ **Why experimental?**
 1. **Requires bird with media support** - PR [#14](https://github.com/steipete/bird/pull/14) adds media extraction. Until merged, you'll need a fork with this PR or wait for an upstream release. Without it, `--media` is a no-op (empty array).
 2. **Workflow still being refined** - Short screengrabs (< 30s) don't need transcripts, but longer videos might. We're still figuring out the best handling.
+
+### Obsidian Export
+
+Export bookmarks directly to your Obsidian vault as individual notes:
+
+```bash
+# Export to configured vault
+npx smaug fetch --obsidian
+
+# Preview without writing files
+npx smaug fetch --obsidian --dry-run
+```
+
+Configure your vault path in `smaug.config.json`:
+
+```json
+{
+  "obsidian": {
+    "vaultPath": "~/your-vault",
+    "clippingsFolder": "Clippings"
+  }
+}
+```
+
+Notes are created in `{vaultPath}/{clippingsFolder}/` with frontmatter including author, source URL, and date. The note format varies based on content:
+
+- **Tweet without link**: Author is `@authorName`, body is the tweet text
+- **Tweet with link**: Author is extracted from the linked content (falls back to `@author`), body is the linked content's text
 
 ## Claude Code Integration
 
