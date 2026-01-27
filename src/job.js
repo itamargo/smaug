@@ -96,6 +96,49 @@ export function getPathSeparator(platform = process.platform) {
 }
 
 // ============================================================================
+// Environment Builder for Claude Code Subprocess
+// ============================================================================
+
+/**
+ * Build environment variables for Claude Code subprocess
+ * Supports both Anthropic (default) and z.ai providers
+ *
+ * @param {Object} config - Smaug configuration
+ * @param {Object} cleanEnv - Base environment (without Claude detection vars)
+ * @param {string} enhancedPath - PATH with node locations
+ * @param {string|null} anthropicApiKey - Anthropic API key (if using Anthropic)
+ * @returns {Object} Environment variables for subprocess
+ */
+export function buildClaudeEnv(config, cleanEnv, enhancedPath, anthropicApiKey) {
+  const env = {
+    ...cleanEnv,
+    PATH: enhancedPath,
+  };
+
+  if (config.zai?.enabled && config.zai?.apiKey) {
+    // z.ai provider - use ANTHROPIC_AUTH_TOKEN and ANTHROPIC_BASE_URL
+    env.ANTHROPIC_AUTH_TOKEN = config.zai.apiKey;
+    env.ANTHROPIC_BASE_URL = config.zai.baseUrl || 'https://api.z.ai/api/anthropic';
+
+    // Optional model mapping overrides
+    if (config.zai.modelMapping?.opus) {
+      env.ANTHROPIC_DEFAULT_OPUS_MODEL = config.zai.modelMapping.opus;
+    }
+    if (config.zai.modelMapping?.sonnet) {
+      env.ANTHROPIC_DEFAULT_SONNET_MODEL = config.zai.modelMapping.sonnet;
+    }
+    if (config.zai.modelMapping?.haiku) {
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = config.zai.modelMapping.haiku;
+    }
+  } else if (anthropicApiKey) {
+    // Standard Anthropic provider
+    env.ANTHROPIC_API_KEY = anthropicApiKey;
+  }
+
+  return env;
+}
+
+// ============================================================================
 // Lock Management - Prevents overlapping runs
 // ============================================================================
 
@@ -214,13 +257,12 @@ async function invokeClaudeCode(config, bookmarkCount, options = {}) {
     delete cleanEnv.CLAUDECODE;
     delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
 
+    // Build environment with appropriate provider settings (Anthropic or z.ai)
+    const claudeEnv = buildClaudeEnv(config, cleanEnv, enhancedPath, apiKey);
+
     const proc = spawn(claudePath, args, {
       cwd: config.projectRoot || process.cwd(),
-      env: {
-        ...cleanEnv,
-        PATH: enhancedPath,
-        ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {})
-      },
+      env: claudeEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       // On Windows, use shell to resolve .cmd files properly
       shell: isWindows
@@ -539,10 +581,16 @@ async function invokeClaudeCode(config, bookmarkCount, options = {}) {
             let tokenDisplay = '';
             if (trackTokens && (tokenUsage.input > 0 || tokenUsage.output > 0)) {
               // Pricing per million tokens (as of 2024)
+              // Includes both Anthropic Claude models and z.ai GLM models
               const pricing = {
                 'sonnet': { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
                 'haiku': { input: 0.25, output: 1.25, cacheRead: 0.025, cacheWrite: 0.30 },
-                'opus': { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 }
+                'opus': { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+                // z.ai GLM models (approximate pricing - verify at z.ai)
+                'GLM-4.7': { input: 0.50, output: 2.00, cacheRead: 0, cacheWrite: 0 },
+                'GLM-4.5': { input: 0.50, output: 2.00, cacheRead: 0, cacheWrite: 0 },
+                'GLM-4.5-Air': { input: 0.20, output: 0.80, cacheRead: 0, cacheWrite: 0 },
+                'GLM-4.5-Flash': { input: 0.10, output: 0.40, cacheRead: 0, cacheWrite: 0 }
               };
 
               const mainPricing = pricing[tokenUsage.model] || pricing.sonnet;

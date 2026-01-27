@@ -317,6 +317,17 @@ async function main() {
       console.log(`Twitter:     ${config.twitter?.authToken ? '✓ configured' : '✗ not configured'}`);
       console.log(`Auto-Claude: ${config.autoInvokeClaude ? 'enabled' : 'disabled'}`);
 
+      // Provider info
+      if (config.zai?.enabled) {
+        const modelOverride = config.zai.modelMapping?.[config.claudeModel || 'sonnet'];
+        console.log(`Provider:    z.ai (GLM models)`);
+        console.log(`Model:       ${config.claudeModel || 'sonnet'} → ${modelOverride || 'default mapping'}`);
+        console.log(`API Key:     ${config.zai.apiKey ? '✓ configured' : '✗ not configured'}`);
+      } else {
+        console.log(`Provider:    Anthropic Claude`);
+        console.log(`Model:       ${config.claudeModel || 'sonnet'}`);
+      }
+
       if (fs.existsSync(config.pendingFile)) {
         const pending = JSON.parse(fs.readFileSync(config.pendingFile, 'utf8'));
         console.log(`Pending:     ${pending.bookmarks.length} bookmarks`);
@@ -375,6 +386,11 @@ Config (smaug.config.json):
   "source": "bookmarks"    Default source (bookmarks, likes, or both)
   "includeMedia": false    EXPERIMENTAL: Include media (default: off)
   "folders": {}            Map folder IDs to tags (see README)
+
+z.ai Provider (use GLM models instead of Claude):
+  "zai.enabled": true              Enable z.ai provider
+  "zai.apiKey": "..."              Your z.ai API key
+  "zai.modelMapping.sonnet": "..." Override sonnet→GLM-4.7 default
 
 More info: https://github.com/alexknowshtml/smaug
 `);

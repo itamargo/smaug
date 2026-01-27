@@ -132,7 +132,26 @@ const DEFAULT_CONFIG = {
   webhookUrl: null,
 
   // Webhook type: 'discord', 'slack', or 'generic'
-  webhookType: 'discord'
+  webhookType: 'discord',
+
+  // ---- z.ai Provider Settings (project-scoped) ----
+  // Use z.ai's GLM models instead of Anthropic Claude
+  // See: https://docs.z.ai/scenario-example/develop-tools/claude
+  zai: {
+    // Enable z.ai provider (disables Anthropic)
+    enabled: false,
+    // z.ai API key (passed as ANTHROPIC_AUTH_TOKEN)
+    apiKey: null,
+    // z.ai API endpoint
+    baseUrl: 'https://api.z.ai/api/anthropic',
+    // Optional: Override default model mappings
+    // By default: opus→GLM-4.7, sonnet→GLM-4.7, haiku→GLM-4.5-Air
+    modelMapping: {
+      opus: null,    // e.g., 'GLM-4.5' to override
+      sonnet: null,  // e.g., 'GLM-4.5-Air' to override
+      haiku: null    // e.g., 'GLM-4.5-Flash' to override
+    }
+  }
 };
 
 /**
@@ -193,6 +212,15 @@ export function loadConfig(configPath) {
     folders: {
       ...DEFAULT_CONFIG.folders,
       ...fileConfig.folders
+    },
+    // Deep merge z.ai config
+    zai: {
+      ...DEFAULT_CONFIG.zai,
+      ...fileConfig.zai,
+      modelMapping: {
+        ...DEFAULT_CONFIG.zai.modelMapping,
+        ...(fileConfig.zai?.modelMapping || {})
+      }
     }
   };
 
@@ -243,6 +271,17 @@ export function loadConfig(configPath) {
   }
   if (process.env.WEBHOOK_TYPE) {
     config.webhookType = process.env.WEBHOOK_TYPE;
+  }
+
+  // z.ai env vars
+  if (process.env.ZAI_ENABLED !== undefined) {
+    config.zai.enabled = process.env.ZAI_ENABLED === 'true';
+  }
+  if (process.env.ZAI_API_KEY) {
+    config.zai.apiKey = process.env.ZAI_API_KEY;
+  }
+  if (process.env.ZAI_BASE_URL) {
+    config.zai.baseUrl = process.env.ZAI_BASE_URL;
   }
 
   // Expand ~ in all path-related config values
