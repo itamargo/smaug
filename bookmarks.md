@@ -1,3 +1,26 @@
+# Monday, January 26, 2026
+
+## @DarioAmodei - The Adolescence of Technology
+> The Adolescence of Technology: an essay on the risks posed by powerful AI to national security, economies and democracy—and how we can defend against them
+
+- **Tweet:** https://x.com/DarioAmodei/status/2015833046327402527
+- **Link:** https://www.darioamodei.com/essay/the-adolescence-of-technology
+- **Filed:** [The Adolescence of Technology](./knowledge/articles/the-adolescence-of-technology.md)
+- **What:** Anthropic CEO Dario Amodei's essay examining AI risks to national security, economies, and democracy, with frameworks for defense and mitigation.
+
+---
+
+# Saturday, January 17, 2026
+
+## @affaanmustafa - X Article Share
+> https://t.co/NscRA7sqBt
+
+- **Tweet:** https://x.com/affaanmustafa/status/2012378465664745795
+- **Link:** https://x.com/i/article/2012310917812502528
+- **What:** Shared X article (content not directly accessible via bookmarking tool). Original link preserved for reference.
+
+---
+
 # Sunday, January 4, 2026
 
 ## @trq212 - AI alignment and interpretability resources
