@@ -18,6 +18,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import { loadConfig } from './config.js';
+import { formatClippingNote, generateNoteFilename, writeClippingNote } from './obsidian.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -753,6 +754,55 @@ export async function fetchAndPrepareBookmarks(options = {}) {
     count: allBookmarks.length,
     bookmarks: allBookmarks
   };
+
+  // Handle Obsidian export if requested
+  if (options.obsidian) {
+    const vaultPath = config.obsidian?.vaultPath;
+    const clippingsFolder = config.obsidian?.clippingsFolder || 'Clippings';
+
+    if (!vaultPath) {
+      throw new Error('Obsidian vault path not configured. Set obsidian.vaultPath in smaug.config.json');
+    }
+
+    console.log(`\n${options.dryRun ? '[DRY RUN] ' : ''}Exporting to Obsidian vault: ${vaultPath}/${clippingsFolder}`);
+
+    let obsidianCount = 0;
+    let skippedCount = 0;
+    for (const bookmark of prepared) {
+      try {
+        const noteContent = formatClippingNote(bookmark);
+        const filename = generateNoteFilename(bookmark);
+
+        if (options.dryRun) {
+          console.log(`\n--- Note: ${filename} ---`);
+          console.log(noteContent);
+          console.log('--- End Note ---');
+          obsidianCount++;
+        } else {
+          const result = writeClippingNote(vaultPath, bookmark, { clippingsFolder });
+          if (result.skipped) {
+            console.log(`  Skipped (duplicate): ${result.filename}`);
+            skippedCount++;
+          } else {
+            console.log(`  Created: ${result.filename}`);
+            obsidianCount++;
+          }
+        }
+      } catch (error) {
+        console.error(`  Error creating note for bookmark ${bookmark.id}: ${error.message}`);
+      }
+    }
+
+    if (skippedCount > 0) {
+      console.log(`\n  Skipped ${skippedCount} duplicate(s)`);
+    }
+
+    // Update state
+    state.last_check = now.toISOString();
+    saveState(config, state);
+
+    return { bookmarks: prepared, count: prepared.length, obsidianCount, pendingFile: config.pendingFile };
+  }
 
   const pendingDir = path.dirname(config.pendingFile);
   if (!fs.existsSync(pendingDir)) {

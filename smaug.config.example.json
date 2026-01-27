@@ -11,6 +11,11 @@
   "autoInvokeClaude": true,
   "claudeModel": "sonnet",
 
+  "obsidian": {
+    "vaultPath": "~/your-vault",
+    "clippingsFolder": "Clippings"
+  },
+
   "zai": {
     "enabled": false,
     "apiKey": "YOUR_ZAI_API_KEY_HERE",

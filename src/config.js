@@ -127,6 +127,15 @@ const DEFAULT_CONFIG = {
   // Webhook type: 'discord', 'slack', or 'generic'
   webhookType: 'discord',
 
+  // ---- Obsidian Vault Export ----
+  // Export bookmarks as notes in an Obsidian vault
+  obsidian: {
+    // Path to Obsidian vault (must be configured by user)
+    vaultPath: null,
+    // Folder within vault for clippings
+    clippingsFolder: 'Clippings'
+  },
+
   // ---- z.ai Provider Settings (project-scoped) ----
   // Use z.ai's GLM models instead of Anthropic Claude
   // See: https://docs.z.ai/scenario-example/develop-tools/claude
@@ -214,6 +223,11 @@ export function loadConfig(configPath) {
         ...DEFAULT_CONFIG.zai.modelMapping,
         ...(fileConfig.zai?.modelMapping || {})
       }
+    },
+    // Deep merge obsidian config
+    obsidian: {
+      ...DEFAULT_CONFIG.obsidian,
+      ...fileConfig.obsidian
     }
   };
 
@@ -283,6 +297,11 @@ export function loadConfig(configPath) {
   config.stateFile = expandTilde(config.stateFile);
   config.birdPath = expandTilde(config.birdPath);
   config.projectRoot = expandTilde(config.projectRoot);
+
+  // Expand ~ in obsidian vault path
+  if (config.obsidian?.vaultPath) {
+    config.obsidian.vaultPath = expandTilde(config.obsidian.vaultPath);
+  }
 
   // Expand ~ in category folders
   if (config.categories) {
