@@ -10,7 +10,7 @@
  * Outputs a JSON bundle for AI analysis (Claude Code, etc.)
  */
 
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -249,6 +249,117 @@ export function stripQuerystring(url) {
   }
 }
 
+/**
+ * Extract X article ID from an x.com/i/article/ URL
+ * @param {string} url - The URL to extract from
+ * @returns {string|null} - The article ID or null if not an article URL
+ */
+export function extractXArticleId(url) {
+  const match = url.match(/x\.com\/i\/article\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Detect the type of a link based on its URL
+ * @param {string} url - The expanded URL
+ * @returns {string} - One of: 'github', 'video', 'x-article', 'media', 'tweet', 'image', 'article'
+ */
+export function detectLinkType(url) {
+  if (url.includes('github.com')) {
+    return 'github';
+  }
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'video';
+  }
+  if (url.includes('x.com') || url.includes('twitter.com')) {
+    // Check for X articles first (x.com/i/article/)
+    if (url.includes('/i/article/')) {
+      return 'x-article';
+    }
+    if (url.includes('/photo/') || url.includes('/video/')) {
+      return 'media';
+    }
+    return 'tweet';
+  }
+  if (url.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+    return 'image';
+  }
+  return 'article';
+}
+
+/**
+ * Fetch X article content using bird CLI
+ * @param {string} articleId - The X article ID
+ * @param {object} config - Config object with bird CLI settings
+ * @returns {object|null} - Content object with title and text, or null on failure
+ */
+export function fetchXArticleContent(articleId, config) {
+  // Validate articleId is numeric to prevent command injection
+  if (!/^\d+$/.test(String(articleId))) {
+    console.log(`  Invalid article ID format: ${articleId}`);
+    return null;
+  }
+
+  try {
+    const env = buildBirdEnv(config);
+    const birdCmd = config.birdPath || 'bird';
+    const output = execSync(`${birdCmd} read ${articleId} --json`, {
+      encoding: 'utf8',
+      timeout: 30000,
+      env
+    });
+    const data = JSON.parse(output);
+    return {
+      title: data.article?.title || null,
+      text: data.text || '',
+      source: 'bird-cli'
+    };
+  } catch (error) {
+    console.log(`  Could not fetch X article ${articleId}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fetch article content using summarize CLI for clean extraction
+ * @param {string} url - The article URL
+ * @returns {object|null} - Content object with title, description, text, or null on failure
+ */
+export function fetchArticleWithSummarize(url) {
+  try {
+    // Validate URL format to prevent command injection
+    const parsedUrl = new URL(url);
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      console.log(`  Invalid URL protocol: ${parsedUrl.protocol}`);
+      return null;
+    }
+
+    // Use execFileSync to avoid shell interpolation (prevents command injection)
+    const output = execFileSync(
+      'summarize',
+      ['--extract', '--format', 'md', '--json', url],
+      {
+        encoding: 'utf8',
+        timeout: 60000,
+        maxBuffer: 10 * 1024 * 1024 // 10MB for large articles
+      }
+    );
+    const data = JSON.parse(output);
+    if (data.extracted) {
+      return {
+        title: data.extracted.title || null,
+        description: data.extracted.description || null,
+        text: data.extracted.content || '',
+        source: 'summarize-cli'
+      };
+    }
+    return null;
+  } catch (error) {
+    console.log(`  Summarize CLI failed for ${url}: ${error.message}`);
+    return null;
+  }
+}
+
 function extractGitHubInfo(url) {
   const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
   if (!match) return null;
@@ -305,6 +416,15 @@ export async function fetchGitHubContent(url) {
 }
 
 export async function fetchArticleContent(url) {
+  // Try summarize CLI first for clean extraction
+  const summarized = fetchArticleWithSummarize(url);
+  if (summarized && summarized.text) {
+    console.log(`  Extracted with summarize: "${summarized.title || 'untitled'}"`);
+    return summarized;
+  }
+
+  // Fallback to direct fetch if summarize fails
+  console.log(`  Falling back to direct fetch for ${url}`);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
@@ -461,45 +581,40 @@ export async function fetchAndPrepareBookmarks(options = {}) {
         const expanded = await expandTcoLink(link);
         console.log(`  Expanded: ${link} -> ${expanded}`);
 
-        // Categorize the link
-        let type = 'unknown';
+        // Categorize the link using the new detectLinkType function
+        const type = detectLinkType(expanded);
         let content = null;
 
-        if (expanded.includes('github.com')) {
-          type = 'github';
-        } else if (expanded.includes('youtube.com') || expanded.includes('youtu.be')) {
-          type = 'video';
-        } else if (expanded.includes('x.com') || expanded.includes('twitter.com')) {
-          if (expanded.includes('/photo/') || expanded.includes('/video/')) {
-            type = 'media';
-          } else {
-            type = 'tweet';
-            // Quote tweet - fetch the quoted tweet for context
-            const tweetIdMatch = expanded.match(/status\/(\d+)/);
-            if (tweetIdMatch) {
-              const quotedTweetId = tweetIdMatch[1];
-              console.log(`  Quote tweet detected, fetching ${quotedTweetId}...`);
-              const quotedTweet = fetchTweet(config, quotedTweetId);
-              if (quotedTweet) {
-                content = {
-                  id: quotedTweet.id,
-                  author: quotedTweet.author?.username || 'unknown',
-                  authorName: quotedTweet.author?.name || quotedTweet.author?.username || 'unknown',
-                  text: quotedTweet.text || quotedTweet.full_text || '',
-                  tweetUrl: `https://x.com/${quotedTweet.author?.username || 'unknown'}/status/${quotedTweet.id}`,
-                  source: 'quote-tweet'
-                };
-              }
+        // Handle content fetching based on type
+        if (type === 'x-article') {
+          // X article - fetch using bird CLI with the BOOKMARK's tweet ID
+          // (not the article ID from the URL - they're different)
+          console.log(`  X article detected, fetching with tweet ID ${bookmark.id}...`);
+          const articleContent = fetchXArticleContent(bookmark.id, config);
+          if (articleContent) {
+            content = articleContent;
+            console.log(`  X article: "${articleContent.title || 'untitled'}"`);
+          }
+        } else if (type === 'tweet') {
+          // Quote tweet - fetch the quoted tweet for context
+          const tweetIdMatch = expanded.match(/status\/(\d+)/);
+          if (tweetIdMatch) {
+            const quotedTweetId = tweetIdMatch[1];
+            console.log(`  Quote tweet detected, fetching ${quotedTweetId}...`);
+            const quotedTweet = fetchTweet(config, quotedTweetId);
+            if (quotedTweet) {
+              content = {
+                id: quotedTweet.id,
+                author: quotedTweet.author?.username || 'unknown',
+                authorName: quotedTweet.author?.name || quotedTweet.author?.username || 'unknown',
+                text: quotedTweet.text || quotedTweet.full_text || '',
+                tweetUrl: `https://x.com/${quotedTweet.author?.username || 'unknown'}/status/${quotedTweet.id}`,
+                source: 'quote-tweet'
+              };
             }
           }
-        } else if (expanded.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-          type = 'image';
-        } else {
-          type = 'article';
-        }
-
-        // Fetch content for articles and GitHub repos
-        if (type === 'article' || type === 'github') {
+        } else if (type === 'article' || type === 'github') {
+          // Fetch content for articles and GitHub repos
           try {
             const fetchResult = await fetchContent(expanded, type, config);
 
@@ -516,7 +631,16 @@ export async function fetchAndPrepareBookmarks(options = {}) {
                 source: 'github-api'
               };
               console.log(`  GitHub repo: ${fetchResult.fullName} (${fetchResult.stars} stars)`);
+            } else if (fetchResult.source === 'summarize-cli') {
+              // Clean extracted content from summarize CLI
+              content = {
+                title: fetchResult.title,
+                description: fetchResult.description,
+                text: fetchResult.text?.slice(0, 50000),
+                source: 'summarize-cli'
+              };
             } else {
+              // Fallback direct fetch
               content = {
                 text: fetchResult.text?.slice(0, 10000),
                 source: fetchResult.source,
