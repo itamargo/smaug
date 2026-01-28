@@ -10,7 +10,7 @@
  * Outputs a JSON bundle for AI analysis (Claude Code, etc.)
  */
 
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -21,201 +21,6 @@ import { loadConfig } from './config.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
-
-/**
- * Search for the original tweet that published an X article.
- * Used when bookmarked tweet is a share, not the original.
- */
-function searchForArticleTweet(articleId, config) {
-  try {
-    const env = buildBirdEnv(config);
-    const birdCmd = config.birdPath || 'bird';
-    // articleId is validated as digits-only by caller's regex
-    const searchQuery = `url:x.com/i/article/${articleId}`;
-    const output = execSync(`${birdCmd} search "${searchQuery}" -n 5 --json`, {
-      encoding: 'utf8',
-      timeout: 30000,
-      env
-    });
-    const parsed = JSON.parse(output);
-    // bird CLI may return array or { tweets: [...] } depending on version
-    const results = Array.isArray(parsed) ? parsed : (parsed.tweets || []);
-    if (results.length > 0) {
-      // Prefer tweets with article metadata (likely the original)
-      for (const tweet of results) {
-        if (tweet.article?.title || tweet.article?.previewText) {
-          return tweet;
-        }
-      }
-      return results[0];
-    }
-    return null;
-  } catch (error) {
-    console.log(`  Article search failed: ${error.message}`);
-    return null;
-  }
-}
-
-/**
- * Fetches X article content via bird CLI.
- * Direct HTTP fetch won't work - X articles are JS-rendered SPAs that require
- * the Twitter API (via bird CLI) to get the actual content.
- */
-export async function fetchXArticleContent(articleUrl, config, sourceTweetId = null) {
-  const articleIdMatch = articleUrl.match(/\/i\/article\/(\d+)/);
-  if (!articleIdMatch) {
-    return { error: 'Could not parse X article URL', source: 'x-article' };
-  }
-
-  const articleId = articleIdMatch[1];
-  const env = buildBirdEnv(config);
-  const birdCmd = config.birdPath || 'bird';
-
-  const extractArticle = (tweetData, source, tweetId) => {
-    let articleContent = tweetData.text || '';
-    let articleMeta = tweetData.article || {};
-    let actualTweetId = tweetId;
-
-    // When someone quotes an X article, the full content is in quotedTweet, not main text
-    const quotedTweet = tweetData.quotedTweet;
-    if (quotedTweet) {
-      const quotedContent = quotedTweet.text || '';
-      const quotedMeta = quotedTweet.article || {};
-      
-      const mainHasMeta = articleMeta.title || articleMeta.previewText;
-      const quotedHasMeta = quotedMeta.title || quotedMeta.previewText;
-      
-      if (quotedContent.length > articleContent.length) {
-        articleContent = quotedContent;
-        actualTweetId = quotedTweet.id || tweetId;
-        // Only switch metadata if quoted has it (preserve main's metadata otherwise)
-        if (quotedHasMeta) {
-          articleMeta = quotedMeta;
-        }
-      } else if (quotedHasMeta && !mainHasMeta) {
-        articleMeta = quotedMeta;
-        if (quotedContent.length > 500) {
-          articleContent = quotedContent;
-          actualTweetId = quotedTweet.id || tweetId;
-        }
-      }
-    }
-
-    const hasArticleMeta = articleMeta.title || articleMeta.previewText;
-    const hasArticleContent = articleContent.length > 500;
-
-    if (hasArticleMeta || hasArticleContent) {
-      return {
-        articleId,
-        title: articleMeta.title || null,
-        previewText: articleMeta.previewText || null,
-        content: articleContent,
-        url: articleUrl,
-        source,
-        sourceTweetId: actualTweetId
-      };
-    }
-    return null;
-  };
-
-  // Try the bookmarked tweet first - fastest path when it contains the article directly
-  if (sourceTweetId) {
-    try {
-      const output = execSync(`${birdCmd} read ${sourceTweetId} --json`, {
-        encoding: 'utf8',
-        timeout: 30000,
-        env
-      });
-      const tweetData = JSON.parse(output);
-      const result = extractArticle(tweetData, 'bird-cli', sourceTweetId);
-      if (result) return result;
-
-      console.log(`  Bookmarked tweet is a share, searching for original article tweet...`);
-    } catch (error) {
-      console.log(`  Bird CLI article fetch failed: ${error.message}`);
-    }
-  }
-
-  // Bookmarked tweet was a share/retweet - search for the original article tweet
-  const originalTweet = searchForArticleTweet(articleId, config);
-  if (originalTweet) {
-    // Use search result directly if it has full content (avoids extra API call)
-    const searchContent = originalTweet.text || originalTweet.quotedTweet?.text || '';
-    if (searchContent.length > 500) {
-      const searchResult = extractArticle(originalTweet, 'bird-cli-search', originalTweet.id);
-      if (searchResult) {
-        console.log(`  Found original article tweet with full content: ${originalTweet.id}`);
-        return searchResult;
-      }
-    }
-
-    // Search result truncated - need full tweet data
-    try {
-      console.log(`  Found original article tweet: ${originalTweet.id}, fetching full content...`);
-      const output = execSync(`${birdCmd} read ${originalTweet.id} --json`, {
-        encoding: 'utf8',
-        timeout: 30000,
-        env
-      });
-      const tweetData = JSON.parse(output);
-      const readResult = extractArticle(tweetData, 'bird-cli-search-read', originalTweet.id);
-      if (readResult) return readResult;
-    } catch (error) {
-      console.log(`  Could not read original tweet: ${error.message}`);
-    }
-
-    const result = extractArticle(originalTweet, 'bird-cli-search', originalTweet.id);
-    if (result) {
-      console.log(`  Using search result metadata (truncated content)`);
-      return result;
-    }
-  }
-
-  // Last resort: scrape meta tags (can't get full content - X articles require JS to render)
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    
-    const response = await fetch(articleUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-      },
-      signal: controller.signal,
-      redirect: 'follow'
-    });
-    clearTimeout(timeout);
-    
-    const html = await response.text();
-    const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
-    const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i) ||
-                      html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']description["']/i);
-    const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
-                         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
-    const ogDescMatch = html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
-                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:description["']/i);
-    
-    const authorMatch = html.match(/@(\w+)/);
-    
-    return {
-      articleId,
-      title: ogTitleMatch?.[1] || titleMatch?.[1]?.replace(' / X', '').replace(' on X', '') || null,
-      description: ogDescMatch?.[1] || descMatch?.[1] || null,
-      author: authorMatch?.[1] || null,
-      url: articleUrl,
-      source: 'x-article-meta',
-      note: 'X article content requires JavaScript rendering - metadata only'
-    };
-  } catch (error) {
-    console.log(`  Could not fetch X article metadata: ${error.message}`);
-    return {
-      articleId,
-      url: articleUrl,
-      source: 'x-article',
-      error: error.message,
-      note: 'X article - content extraction failed'
-    };
-  }
-}
 
 // Sites that typically require paywall bypass
 const PAYWALL_DOMAINS = [
@@ -276,9 +81,7 @@ export function fetchBookmarks(config, count = 10, options = {}) {
     let cmd;
     if (useAll) {
       // Paginated fetch - use longer timeout
-      // Calculate maxPages from count (bird returns ~20 per page, use 25 as buffer)
-      const estimatedPagesNeeded = Math.ceil(count / 20);
-      const maxPages = options.maxPages || Math.max(estimatedPagesNeeded, 10);
+      const maxPages = options.maxPages || 10; // Limit pages to prevent runaway
       cmd = folderId
         ? `${birdCmd} bookmarks --folder-id ${folderId} --all --max-pages ${maxPages} --json`
         : `${birdCmd} bookmarks --all --max-pages ${maxPages} --json`;
@@ -302,16 +105,7 @@ export function fetchBookmarks(config, count = 10, options = {}) {
     const parsed = JSON.parse(output);
     // bird CLI v0.6.0+ returns { tweets: [...], nextCursor: ... } for paginated requests
     // but plain arrays for non-paginated. Handle both formats.
-    let bookmarks = Array.isArray(parsed) ? parsed : (parsed.tweets || []);
-
-    // Respect the count parameter - truncate if we fetched more than requested
-    // (paginated mode may return more bookmarks than asked for)
-    if (bookmarks.length > count) {
-      console.log(`  Fetched ${bookmarks.length} bookmarks, limiting to requested ${count}`);
-      bookmarks = bookmarks.slice(0, count);
-    }
-
-    return bookmarks;
+    return Array.isArray(parsed) ? parsed : (parsed.tweets || []);
   } catch (error) {
     throw new Error(`Failed to fetch bookmarks: ${error.message}`);
   }
@@ -455,6 +249,117 @@ export function stripQuerystring(url) {
   }
 }
 
+/**
+ * Extract X article ID from an x.com/i/article/ URL
+ * @param {string} url - The URL to extract from
+ * @returns {string|null} - The article ID or null if not an article URL
+ */
+export function extractXArticleId(url) {
+  const match = url.match(/x\.com\/i\/article\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Detect the type of a link based on its URL
+ * @param {string} url - The expanded URL
+ * @returns {string} - One of: 'github', 'video', 'x-article', 'media', 'tweet', 'image', 'article'
+ */
+export function detectLinkType(url) {
+  if (url.includes('github.com')) {
+    return 'github';
+  }
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'video';
+  }
+  if (url.includes('x.com') || url.includes('twitter.com')) {
+    // Check for X articles first (x.com/i/article/)
+    if (url.includes('/i/article/')) {
+      return 'x-article';
+    }
+    if (url.includes('/photo/') || url.includes('/video/')) {
+      return 'media';
+    }
+    return 'tweet';
+  }
+  if (url.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+    return 'image';
+  }
+  return 'article';
+}
+
+/**
+ * Fetch X article content using bird CLI
+ * @param {string} articleId - The X article ID
+ * @param {object} config - Config object with bird CLI settings
+ * @returns {object|null} - Content object with title and text, or null on failure
+ */
+export function fetchXArticleContent(articleId, config) {
+  // Validate articleId is numeric to prevent command injection
+  if (!/^\d+$/.test(String(articleId))) {
+    console.log(`  Invalid article ID format: ${articleId}`);
+    return null;
+  }
+
+  try {
+    const env = buildBirdEnv(config);
+    const birdCmd = config.birdPath || 'bird';
+    const output = execSync(`${birdCmd} read ${articleId} --json`, {
+      encoding: 'utf8',
+      timeout: 30000,
+      env
+    });
+    const data = JSON.parse(output);
+    return {
+      title: data.article?.title || null,
+      text: data.text || '',
+      source: 'bird-cli'
+    };
+  } catch (error) {
+    console.log(`  Could not fetch X article ${articleId}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fetch article content using summarize CLI for clean extraction
+ * @param {string} url - The article URL
+ * @returns {object|null} - Content object with title, description, text, or null on failure
+ */
+export function fetchArticleWithSummarize(url) {
+  try {
+    // Validate URL format to prevent command injection
+    const parsedUrl = new URL(url);
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      console.log(`  Invalid URL protocol: ${parsedUrl.protocol}`);
+      return null;
+    }
+
+    // Use execFileSync to avoid shell interpolation (prevents command injection)
+    const output = execFileSync(
+      'summarize',
+      ['--extract', '--format', 'md', '--json', url],
+      {
+        encoding: 'utf8',
+        timeout: 60000,
+        maxBuffer: 10 * 1024 * 1024 // 10MB for large articles
+      }
+    );
+    const data = JSON.parse(output);
+    if (data.extracted) {
+      return {
+        title: data.extracted.title || null,
+        description: data.extracted.description || null,
+        text: data.extracted.content || '',
+        source: 'summarize-cli'
+      };
+    }
+    return null;
+  } catch (error) {
+    console.log(`  Summarize CLI failed for ${url}: ${error.message}`);
+    return null;
+  }
+}
+
 function extractGitHubInfo(url) {
   const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
   if (!match) return null;
@@ -511,6 +416,15 @@ export async function fetchGitHubContent(url) {
 }
 
 export async function fetchArticleContent(url) {
+  // Try summarize CLI first for clean extraction
+  const summarized = fetchArticleWithSummarize(url);
+  if (summarized && summarized.text) {
+    console.log(`  Extracted with summarize: "${summarized.title || 'untitled'}"`);
+    return summarized;
+  }
+
+  // Fallback to direct fetch if summarize fails
+  console.log(`  Falling back to direct fetch for ${url}`);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
@@ -659,91 +573,48 @@ export async function fetchAndPrepareBookmarks(options = {}) {
       }
       const author = bookmark.author?.username || bookmark.user?.screen_name || 'unknown';
 
+      // Find and expand t.co links
       const tcoLinks = text.match(/https?:\/\/t\.co\/\w+/g) || [];
-      
-      // Bookmarks API returns truncated quotedTweet data, so check it for links too
-      if (bookmark.quotedTweet?.text) {
-        const quotedLinks = bookmark.quotedTweet.text.match(/https?:\/\/t\.co\/\w+/g) || [];
-        for (const link of quotedLinks) {
-          if (!tcoLinks.includes(link)) {
-            tcoLinks.push(link);
-            console.log(`  Found t.co link in quoted tweet: ${link}`);
-          }
-        }
-      }
-      
       const links = [];
 
-      const expandedResults = await Promise.all(
-        tcoLinks.map(async (link) => {
-          const expanded = await expandTcoLink(link);
-          return { original: link, expanded };
-        })
-      );
-
-      for (const { original: link, expanded } of expandedResults) {
+      for (const link of tcoLinks) {
+        const expanded = await expandTcoLink(link);
         console.log(`  Expanded: ${link} -> ${expanded}`);
 
-        let type = 'unknown';
+        // Categorize the link using the new detectLinkType function
+        const type = detectLinkType(expanded);
         let content = null;
 
-        if (expanded.includes('github.com')) {
-          type = 'github';
-        } else if (expanded.includes('youtube.com') || expanded.includes('youtu.be')) {
-          type = 'video';
-        } else if (expanded.includes('/i/article/')) {
-          // Check before generic x.com - article URLs contain x.com too
-          type = 'x-article';
-          console.log(`  X article detected: ${expanded}`);
-          try {
-            content = await fetchXArticleContent(expanded, config, bookmark.id);
-            if (content.content) {
-              console.log(`  X article fetched: "${content.title || 'untitled'}" (${content.content.length} chars)`);
-            } else if (content.title) {
-              console.log(`  X article metadata only: "${content.title}"`);
-            } else {
-              console.log(`  X article: could not extract content`);
-            }
-          } catch (error) {
-            console.log(`  Could not fetch X article: ${error.message}`);
-            content = {
-              articleId: expanded.match(/\/i\/article\/(\d+)/)?.[1],
-              url: expanded,
-              source: 'x-article',
-              error: error.message
-            };
+        // Handle content fetching based on type
+        if (type === 'x-article') {
+          // X article - fetch using bird CLI with the BOOKMARK's tweet ID
+          // (not the article ID from the URL - they're different)
+          console.log(`  X article detected, fetching with tweet ID ${bookmark.id}...`);
+          const articleContent = fetchXArticleContent(bookmark.id, config);
+          if (articleContent) {
+            content = articleContent;
+            console.log(`  X article: "${articleContent.title || 'untitled'}"`);
           }
-        } else if (expanded.includes('x.com') || expanded.includes('twitter.com')) {
-          if (expanded.includes('/photo/') || expanded.includes('/video/')) {
-            type = 'media';
-          } else {
-            type = 'tweet';
-            // Quote tweet - fetch the quoted tweet for context
-            const tweetIdMatch = expanded.match(/status\/(\d+)/);
-            if (tweetIdMatch) {
-              const quotedTweetId = tweetIdMatch[1];
-              console.log(`  Quote tweet detected, fetching ${quotedTweetId}...`);
-              const quotedTweet = fetchTweet(config, quotedTweetId);
-              if (quotedTweet) {
-                content = {
-                  id: quotedTweet.id,
-                  author: quotedTweet.author?.username || 'unknown',
-                  authorName: quotedTweet.author?.name || quotedTweet.author?.username || 'unknown',
-                  text: quotedTweet.text || quotedTweet.full_text || '',
-                  tweetUrl: `https://x.com/${quotedTweet.author?.username || 'unknown'}/status/${quotedTweet.id}`,
-                  source: 'quote-tweet'
-                };
-              }
+        } else if (type === 'tweet') {
+          // Quote tweet - fetch the quoted tweet for context
+          const tweetIdMatch = expanded.match(/status\/(\d+)/);
+          if (tweetIdMatch) {
+            const quotedTweetId = tweetIdMatch[1];
+            console.log(`  Quote tweet detected, fetching ${quotedTweetId}...`);
+            const quotedTweet = fetchTweet(config, quotedTweetId);
+            if (quotedTweet) {
+              content = {
+                id: quotedTweet.id,
+                author: quotedTweet.author?.username || 'unknown',
+                authorName: quotedTweet.author?.name || quotedTweet.author?.username || 'unknown',
+                text: quotedTweet.text || quotedTweet.full_text || '',
+                tweetUrl: `https://x.com/${quotedTweet.author?.username || 'unknown'}/status/${quotedTweet.id}`,
+                source: 'quote-tweet'
+              };
             }
           }
-        } else if (expanded.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-          type = 'image';
-        } else {
-          type = 'article';
-        }
-
-        // Fetch content for articles and GitHub repos
-        if (type === 'article' || type === 'github') {
+        } else if (type === 'article' || type === 'github') {
+          // Fetch content for articles and GitHub repos
           try {
             const fetchResult = await fetchContent(expanded, type, config);
 
@@ -760,7 +631,16 @@ export async function fetchAndPrepareBookmarks(options = {}) {
                 source: 'github-api'
               };
               console.log(`  GitHub repo: ${fetchResult.fullName} (${fetchResult.stars} stars)`);
+            } else if (fetchResult.source === 'summarize-cli') {
+              // Clean extracted content from summarize CLI
+              content = {
+                title: fetchResult.title,
+                description: fetchResult.description,
+                text: fetchResult.text?.slice(0, 50000),
+                source: 'summarize-cli'
+              };
             } else {
+              // Fallback direct fetch
               content = {
                 text: fetchResult.text?.slice(0, 10000),
                 source: fetchResult.source,
@@ -781,41 +661,7 @@ export async function fetchAndPrepareBookmarks(options = {}) {
         });
       }
 
-      // Fallback for tweets with article metadata but no t.co link to expand
-      const processDirectArticle = async (articleMeta, tweetId, source) => {
-        if (!articleMeta || links.some(l => l.type === 'x-article')) return;
-        
-        console.log(`  Direct X article detected ${source}`);
-        const articleUrl = `https://x.com/i/article/${articleMeta.id || tweetId}`;
-        try {
-          const content = await fetchXArticleContent(articleUrl, config, tweetId);
-          if (content.content) {
-            console.log(`  X article fetched: "${content.title || 'untitled'}" (${content.content.length} chars)`);
-          } else if (content.title) {
-            console.log(`  X article metadata only: "${content.title}"`);
-          }
-          links.push({ original: articleUrl, expanded: articleUrl, type: 'x-article', content });
-        } catch (error) {
-          console.log(`  Could not fetch X article: ${error.message}`);
-          links.push({
-            original: articleUrl,
-            expanded: articleUrl,
-            type: 'x-article',
-            content: {
-              articleId: articleMeta.id || tweetId,
-              title: articleMeta.title || null,
-              previewText: articleMeta.previewText || null,
-              url: articleUrl,
-              source: `${source.replace(/\s+/g, '-')}-meta`,
-              error: error.message
-            }
-          });
-        }
-      };
-
-      await processDirectArticle(bookmark.article, bookmark.id, 'on tweet');
-      await processDirectArticle(bookmark.quotedTweet?.article, bookmark.quotedTweet?.id, 'on quoted tweet');
-
+      // If this is a reply, fetch the parent tweet for context
       let replyContext = null;
       if (bookmark.inReplyToStatusId) {
         console.log(`  This is a reply to ${bookmark.inReplyToStatusId}, fetching parent...`);
