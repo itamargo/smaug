@@ -88,20 +88,50 @@ function extractAuthor(bookmark) {
 }
 
 /**
+ * Check if text looks like raw HTML (not clean extracted content)
+ * @param {string} text - The text to check
+ * @returns {boolean} True if it looks like raw HTML
+ */
+function isRawHtml(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  return trimmed.startsWith('<!DOCTYPE') ||
+         trimmed.startsWith('<html') ||
+         trimmed.startsWith('<?xml');
+}
+
+/**
  * Extract body content for the note
- * - For tweets with links: use link.content.text
+ * - For tweets with links: use link.content.text (if not raw HTML)
+ * - Includes quoted tweet content if present
  * - Falls back to bookmark.text
  * @param {object} bookmark - The bookmark object
  * @returns {string} Body content
  */
 function extractBody(bookmark) {
   const link = bookmark.links?.[0];
+  const parts = [];
 
-  if (link?.content?.text) {
-    return link.content.text;
+  // Check if link content is usable (not raw HTML)
+  const hasUsableLinkContent = link?.content?.text && !isRawHtml(link.content.text);
+
+  if (hasUsableLinkContent) {
+    parts.push(link.content.text);
+  } else {
+    // Use the tweet text as the main body
+    if (bookmark.text) {
+      parts.push(bookmark.text);
+    }
   }
 
-  return bookmark.text || '';
+  // Include quoted tweet content if present
+  if (bookmark.quoteContext) {
+    const qt = bookmark.quoteContext;
+    const quoteBlock = `\n\n---\n\n**Quoted from @${qt.author}:**\n\n${qt.text}\n\n[View quoted tweet](${qt.tweetUrl})`;
+    parts.push(quoteBlock);
+  }
+
+  return parts.join('') || '';
 }
 
 /**
